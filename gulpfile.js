@@ -21,31 +21,32 @@ const userAppConfigFileName = "app-config.user.yaml";
 const espConsoleBeingWatchedFileName = "esp-console-input.js";
 const espConsoleBeingWatchedFilePath = path.join(distDir, espConsoleBeingWatchedFileName);
 
-gulp.task("build", ["prepare-for-espruino"]);
 
-gulp.task("prepare-for-espruino", ['compile-ts', 'content-to-dist'], (cb) => {
-    if (!fs.existsSync(appFilePath)) {
-        cb("main app file does not exit " + appFilePath);
-        return;
+
+gulp.task("gen-config-ts", (cb) => {
+    if (!fs.existsSync(userAppConfigFileName)) {
+        const content = fs.readFileSync(appConfigFileName)
+            .toString()
+            .split("\n")
+            .map(x => `# ${x}`)
+            .join("\n");
+
+        fs.writeFileSync(userAppConfigFileName, content, { encoding: "utf-8" });
     }
 
-    let appContent = fs.readFileSync(appFilePath).toString();
-    appContent = appContent.replace('Object.defineProperty(exports, "__esModule", { value: true });', "");
-    fs.writeFileSync(appFilePath, appContent);
-
-    const buildproc = fork(
-        require.resolve("espruino/bin/espruino-cli"),
-        ["--board", envConfig.board, appFileName, "-o", espReadyBundleFileName],
-        { cwd: distDir });
-    buildproc.on('close', (code) => {
-        cb();
-    });
+    const appConfig = yaml.load(fs.readFileSync(appConfigFileName));
+    const userAppConfig = yaml.load(fs.readFileSync(userAppConfigFileName));
+    const mergedAppConfig = _.assign(appConfig, userAppConfig);
+    const jsonString = JSON.stringify(mergedAppConfig);
+    const resultConfigTsContent = `export default ${jsonString};`;
+    fs.writeFileSync(path.join(srcDir, appConfigTsFileName), resultConfigTsContent);
+    cb();
 });
 
-gulp.task("compile-ts", ["gen-config-ts"], function () {
+gulp.task("compile-ts", gulp.series("gen-config-ts", function () {
     const tsResult = tsProject.src().pipe(tsProject());
     return tsResult.js.pipe(gulp.dest(distDir));
-});
+}));
 
 gulp.task("content-to-dist", () => {
     return gulp
@@ -74,7 +75,7 @@ gulp.task("clear-espurino-watch-file", (cb) => {
         });
 });
 
-gulp.task("espruino-console", ["clear-espurino-watch-file"], (cb) => {
+gulp.task("espruino-console", gulp.series("clear-espurino-watch-file", (cb) => {
     const buildproc = fork(
         require.resolve("espruino/bin/espruino-cli"),
         ["--board", envConfig.board, "-b", envConfig.port_speed, "--port", envConfig.port, "-w", espConsoleBeingWatchedFileName],
@@ -82,24 +83,26 @@ gulp.task("espruino-console", ["clear-espurino-watch-file"], (cb) => {
     buildproc.on('close', (code) => {
         cb();
     });
-});
+}));
 
-gulp.task("gen-config-ts", (cb) => {
-    if (!fs.existsSync(userAppConfigFileName)) {
-        const content = fs.readFileSync(appConfigFileName)
-            .toString()
-            .split("\n")
-            .map(x => `# ${x}`)
-            .join("\n");
 
-        fs.writeFileSync(userAppConfigFileName, content, { encoding: "utf-8" });
+gulp.task("prepare-for-espruino", gulp.series(gulp.parallel('compile-ts', 'content-to-dist'), (cb) => {
+    if (!fs.existsSync(appFilePath)) {
+        cb("main app file does not exit " + appFilePath);
+        return;
     }
 
-    const appConfig = yaml.load(fs.readFileSync(appConfigFileName));
-    const userAppConfig = yaml.load(fs.readFileSync(userAppConfigFileName));
-    const mergedAppConfig = _.assign(appConfig, userAppConfig);
-    const jsonString = JSON.stringify(mergedAppConfig);
-    const resultConfigTsContent = `export default ${jsonString};`;
-    fs.writeFileSync(path.join(srcDir, appConfigTsFileName), resultConfigTsContent);
-    cb();
-});
+    let appContent = fs.readFileSync(appFilePath).toString();
+    appContent = appContent.replace('Object.defineProperty(exports, "__esModule", { value: true });', "");
+    fs.writeFileSync(appFilePath, appContent);
+
+    const buildproc = fork(
+        require.resolve("espruino/bin/espruino-cli"),
+        ["--board", envConfig.board, appFileName, "-o", espReadyBundleFileName],
+        { cwd: distDir });
+    buildproc.on('close', (code) => {
+        cb();
+    });
+}));
+
+gulp.task("build", gulp.series("prepare-for-espruino"));
